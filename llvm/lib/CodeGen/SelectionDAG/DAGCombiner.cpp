@@ -11697,8 +11697,11 @@ static bool isLegalToCombineMinNumMaxNum(SelectionDAG &DAG, SDValue LHS,
 
   const TargetOptions &Options = DAG.getTarget().Options;
 
+  // The target can decide whether to combine based on value types, operands,
+  // flags, and NaN analysis. This allows targets like ARM64 to implement
+  // specific logic for handling NaN semantics of their min/max instructions.
   return (Flags.hasNoSignedZeros() || Options.NoSignedZerosFPMath) &&
-         TLI.isProfitableToCombineMinNumMaxNum(VT) &&
+         TLI.isProfitableToCombineMinNumMaxNum(VT, LHS, RHS, Flags, DAG) &&
          (Flags.hasNoNaNs() ||
           (DAG.isKnownNeverNaN(RHS) && DAG.isKnownNeverNaN(LHS)));
 }

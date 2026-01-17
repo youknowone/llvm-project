@@ -917,6 +917,23 @@ AArch64TargetLowering::AArch64TargetLowering(const TargetMachine &TM,
   }
   // clang-format on
 
+  // Override fminnum/fmaxnum to Expand for scalar types to fix NaN handling.
+  // ARM64's fmaxnm instruction converts SNAN to QNAN (IEEE 754-2008 semantics),
+  // which differs from the fcmp ogt + select pattern (ordered comparison).
+  //
+  // These setOperationAction calls are necessary because:
+  // 1. At higher opt-levels: DAGCombiner with isProfitableToCombineMinNumMaxNum prevents combine
+  // 2. At lower opt-levels: Direct instruction selection may still pick fmaxnm
+  //    even without TableGen patterns, so Expand forces fcmp+select emission.
+  setOperationAction(ISD::FMINNUM, MVT::f32, Expand);
+  setOperationAction(ISD::FMAXNUM, MVT::f32, Expand);
+  setOperationAction(ISD::FMINNUM, MVT::f64, Expand);
+  setOperationAction(ISD::FMAXNUM, MVT::f64, Expand);
+  setOperationAction(ISD::FMINNUM_IEEE, MVT::f32, Expand);
+  setOperationAction(ISD::FMAXNUM_IEEE, MVT::f32, Expand);
+  setOperationAction(ISD::FMINNUM_IEEE, MVT::f64, Expand);
+  setOperationAction(ISD::FMAXNUM_IEEE, MVT::f64, Expand);
+
   // Basic strict FP operations are legal
   for (auto Op : {ISD::STRICT_FADD, ISD::STRICT_FSUB, ISD::STRICT_FMUL,
                   ISD::STRICT_FDIV, ISD::STRICT_FMA, ISD::STRICT_FSQRT}) {
@@ -16580,6 +16597,31 @@ bool AArch64TargetLowering::isProfitableToHoist(Instruction *I) const {
            isOperationLegalOrCustom(ISD::FMA, getValueType(DL, Ty)) &&
            (Options.AllowFPOpFusion == FPOpFusion::Fast ||
             Options.UnsafeFPMath));
+}
+
+bool AArch64TargetLowering::isProfitableToCombineMinNumMaxNum(
+    EVT VT, SDValue LHS, SDValue RHS, const SDNodeFlags &Flags,
+    SelectionDAG &DAG) const {
+  // Vector types: always allow combination (vectors use different instructions)
+  if (VT.isVector())
+    return true;
+
+  // Explicit nnan flag: safe to optimize
+  if (Flags.hasNoNaNs())
+    return true;
+
+  // ARM64's fmaxnm/fminnm instructions (IEEE 754-2008) convert signaling NaN
+  // (SNAN) to quiet NaN (QNAN), which differs from fcmp ogt + select semantics.
+  // Only allow combination if we can prove no SNAN is present.
+  //
+  // Note: We still rely on setOperationAction(Expand) and removed TableGen
+  // patterns to ensure fcmp+select expansion at all optimization levels,
+  // as TableGen can bypass this check at lower opt levels.
+  if (DAG.isKnownNeverSNaN(LHS) && DAG.isKnownNeverSNaN(RHS))
+    return true;
+
+  // Otherwise: don't combine, expand to fcmp+select for correctness
+  return false;
 }
 
 // All 32-bit GPR operations implicitly zero the high-half of the corresponding
